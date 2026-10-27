@@ -13,8 +13,8 @@ Paquete Arch de [`ravn-trio`](https://github.com/robert-flo/ravn-trio): instala 
 `robert-flo/ravn-trio` es privado, así que el tarball del release va en este repo:
 
 ```bash
-git -C ../ravn-trio archive --format=tar --prefix=ravn-trio-0.1.1/ v0.1.1 | gzip -n > ravn-trio-0.1.1.tar.gz
-sha256sum ravn-trio-0.1.1.tar.gz   # actualizá sha256sums y .SRCINFO
+git -C ../ravn-trio archive --format=tar --prefix=ravn-trio-0.1.2/ v0.1.2 | gzip -n > ravn-trio-0.1.2.tar.gz
+sha256sum ravn-trio-0.1.2.tar.gz   # actualizá sha256sums y .SRCINFO
 ```
 
 ## Instalar en local

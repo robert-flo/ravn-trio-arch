@@ -1,6 +1,6 @@
 pkgbase = ravn-trio
 	pkgdesc = Trío PM/WK/RV local en herdr: pj-trio y plugin ravn.trio
-	pkgver = 0.1.1
+	pkgver = 0.1.2
 	pkgrel = 1
 	url = https://github.com/robert-flo/ravn-trio
 	arch = any
@@ -13,7 +13,7 @@ pkgbase = ravn-trio
 	depends = github-cli
 	depends = herdr>=0.9.5
 	options = !debug
-	source = ravn-trio-0.1.1.tar.gz
-	sha256sums = 4b4e87005a640d72e82d02cda0357f047c90067006efa84d0c6c91f617a0f81c
+	source = ravn-trio-0.1.2.tar.gz
+	sha256sums = ee09ec38cd6d660845bb1c1fe1955469c45693af2f8efd66d4ca033a9b9b9791
 
 pkgname = ravn-trio
