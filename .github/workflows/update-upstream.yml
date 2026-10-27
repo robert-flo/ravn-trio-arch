@@ -1,0 +1,122 @@
+name: Update package from upstream release
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-upstream-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: robert-flo/ravn-trio
+
+jobs:
+  update:
+    name: Check, build, and record package update
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install automation tooling
+        run: |
+          set -Eeuo pipefail
+          pacman -Syu --noconfirm --needed curl git github-cli jq shellcheck
+
+      - name: Re-checkout with complete Git history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Validate automation contracts
+        run: |
+          set -Eeuo pipefail
+          test -x scripts/check_upstream.sh
+          test -x scripts/update_package.sh
+          test -x tests/test-upstream-automation.sh
+          bash -n scripts/*.sh tests/*.sh tests/lib/*.sh
+          shellcheck scripts/*.sh tests/*.sh tests/lib/*.sh
+          tests/test-upstream-automation.sh
+
+      - name: Check latest stable upstream release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          scripts/check_upstream.sh
+
+      - name: Report unchanged package
+        if: steps.check.outputs.changed != 'true'
+        run: echo "PKGBUILD already matches upstream ${{ steps.check.outputs.upstream_tag }}."
+
+      - name: Update PKGBUILD
+        if: steps.check.outputs.changed == 'true'
+        id: update
+        env:
+          UPSTREAM_VERSION: ${{ steps.check.outputs.upstream_version }}
+          ARCHIVE_SHA256: ${{ steps.check.outputs.archive_sha256 }}
+        run: |
+          set -Eeuo pipefail
+          scripts/update_package.sh
+
+      - name: Create non-root package builder
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -Eeuo pipefail
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Regenerate .SRCINFO
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -Eeuo pipefail
+          su builder --shell /bin/bash --command \
+            "cd '$GITHUB_WORKSPACE' && makepkg --printsrcinfo > .SRCINFO"
+
+      - name: Build package
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          set -Eeuo pipefail
+          su builder --shell /bin/bash --command \
+            "cd '$GITHUB_WORKSPACE' && makepkg --force --nodeps --noconfirm"
+
+      - name: Upload package artifact
+        if: steps.check.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ravn-trio-${{ steps.update.outputs.pkgver }}-${{ steps.update.outputs.pkgrel }}
+          if-no-files-found: error
+          path: "*.pkg.tar.zst"
+
+      - name: Commit package metadata
+        if: steps.check.outputs.changed == 'true'
+        env:
+          PKGVER: ${{ steps.update.outputs.pkgver }}
+          PKGREL: ${{ steps.update.outputs.pkgrel }}
+        run: |
+          set -Eeuo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git add PKGBUILD .SRCINFO
+
+          if git diff --cached --quiet; then
+            echo "No package metadata changed."
+            exit 0
+          fi
+
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "chore: update package to v${PKGVER}-${PKGREL}"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (.SRCINFO + ShellCheck)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      # git antes del checkout: sin git, actions/checkout baja un tarball sin .git
+      # y `git diff --check` de make lint falla.
+      - name: Herramientas
+        run: pacman -Syu --noconfirm --needed git shellcheck make jq
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su builder --shell /bin/bash --command "cd '$GITHUB_WORKSPACE' && git config --global --add safe.directory '$GITHUB_WORKSPACE' && make lint"
+      - name: Automatización upstream (offline)
+        run: tests/test-upstream-automation.sh
+
+  package:
+    name: Build + install en Arch (Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # La fuente es privada: el tarball vendoreado ES la fuente del paquete.
+      - name: Checksum y código fuente del tarball vendoreado
+        run: |
+          pkgver="$(awk -F= '/^pkgver=/{print $2; exit}' PKGBUILD)"
+          sha="$(awk -F "'" '/^sha256sums=/{f=1} f && /[0-9a-f]{64}/{print $2; exit}' PKGBUILD)"
+          echo "$sha  ravn-trio-${pkgver}.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/src"
+          tar -xzf "ravn-trio-${pkgver}.tar.gz" -C "$RUNNER_TEMP/src" --strip-components=1
+          git -C "$RUNNER_TEMP/src" init -q
+          git -C "$RUNNER_TEMP/src" add -A
+          git -C "$RUNNER_TEMP/src" -c user.name=ci -c user.email=ci@localhost commit -q -m "v${pkgver}"
+      - name: Build, install y comandos
+        run: make test-local SOURCE_DIR="$RUNNER_TEMP/src"
