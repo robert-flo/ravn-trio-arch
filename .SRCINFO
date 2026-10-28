@@ -1,7 +1,7 @@
 pkgbase = ravn-trio
 	pkgdesc = Trío PM/WK/RV local en herdr: pj-trio y plugin ravn.trio
 	pkgver = 0.1.2
-	pkgrel = 1
+	pkgrel = 2
 	url = https://github.com/robert-flo/ravn-trio
 	arch = any
 	license = MIT
@@ -12,6 +12,7 @@ pkgbase = ravn-trio
 	depends = libnotify
 	depends = github-cli
 	depends = herdr>=0.9.5
+	optdepends = tobi-try: clonar con try-clone el proyecto meta que falte (PJ_TRIO_CLONE_CMD)
 	options = !debug
 	source = ravn-trio-0.1.2.tar.gz
 	sha256sums = ee09ec38cd6d660845bb1c1fe1955469c45693af2f8efd66d4ca033a9b9b9791

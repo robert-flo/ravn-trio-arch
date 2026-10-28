@@ -1,6 +1,6 @@
 pkgname=ravn-trio
 pkgver=0.1.2
-pkgrel=1
+pkgrel=2
 pkgdesc='Trío PM/WK/RV local en herdr: pj-trio y plugin ravn.trio'
 arch=('any')
 url='https://github.com/robert-flo/ravn-trio'
@@ -9,6 +9,7 @@ options=('!debug')
 # herdr lo sirve omarchy-personal-repo (robert-flo/omarchy-pkgs).
 depends=('bash' 'git' 'jq' 'libnotify' 'github-cli' 'herdr>=0.9.5')
 makedepends=('make')
+optdepends=('tobi-try: clonar con try-clone el proyecto meta que falte (PJ_TRIO_CLONE_CMD)')
 # Fuente privada: tarball vendoreado (git archive --prefix=${pkgname}-${pkgver}/
 # v${pkgver} | gzip -n), así makepkg no necesita credenciales de GitHub.
 source=("${pkgname}-${pkgver}.tar.gz")
