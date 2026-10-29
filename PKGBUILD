@@ -1,6 +1,6 @@
 pkgname=ravn-trio
-pkgver=0.1.2
-pkgrel=2
+pkgver=0.1.3
+pkgrel=1
 pkgdesc='Trío PM/WK/RV local en herdr: pj-trio y plugin ravn.trio'
 arch=('any')
 url='https://github.com/robert-flo/ravn-trio'
@@ -14,7 +14,7 @@ optdepends=('tobi-try: clonar con try-clone el proyecto meta que falte (PJ_TRIO_
 # v${pkgver} | gzip -n), así makepkg no necesita credenciales de GitHub.
 source=("${pkgname}-${pkgver}.tar.gz")
 sha256sums=(
-  'ee09ec38cd6d660845bb1c1fe1955469c45693af2f8efd66d4ca033a9b9b9791'
+  '961df8100f5b87591abc838b7f2c1aef921a2d0dbe08c65f98e24f9d597399e9'
 )
 
 package() {
