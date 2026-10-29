@@ -57,7 +57,23 @@ main() {
   require_command sha256sum
   [[ -f "$PKGBUILD_PATH" ]] || die "missing PKGBUILD: $PKGBUILD_PATH"
 
-  release_json="$(gh api "repos/$UPSTREAM_REPO/releases/latest")"
+  gh_err_file="$(mktemp "${TMPDIR:-/tmp}/ravn-trio-gh-api-err.XXXXXX")"
+  if ! release_json="$(gh api "repos/$UPSTREAM_REPO/releases/latest" 2>"$gh_err_file")"; then
+    gh_error="$(cat "$gh_err_file")"
+    rm -f "$gh_err_file"
+    # A 404 on releases/latest also covers a repo that does not exist, so
+    # confirm the repo itself resolves before reporting "no releases";
+    # any other failure still kills the script.
+    if [[ $gh_error == *'HTTP 404'* ]] \
+      && gh api "repos/$UPSTREAM_REPO" >/dev/null 2>&1; then
+      printf 'INFO: sin releases en %s, nada que actualizar.\n' "$UPSTREAM_REPO"
+      exit 0
+    fi
+    printf 'ERROR: gh api for %s/releases/latest failed: %s\n' \
+      "$UPSTREAM_REPO" "${gh_error:-<no stderr>}" >&2
+    exit 1
+  fi
+  rm -f "$gh_err_file"
   upstream_tag="$(jq -r '.tag_name // empty' <<< "$release_json")"
   [[ $upstream_tag =~ ^v([0-9]+([.][0-9]+)*)$ ]] \
     || die "latest upstream release tag is not a stable vN.N version: ${upstream_tag:-<empty>}"

@@ -30,6 +30,14 @@ setup() {
 
   cat > "$test_dir/bin/gh" <<'MOCK_GH'
 #!/usr/bin/env bash
+if [[ -n ${MOCK_GH_REPO_MISSING:-} ]]; then
+  printf 'gh: Not Found (HTTP 404)\n' >&2
+  exit 1
+fi
+if [[ -n ${MOCK_GH_NO_RELEASES:-} && "$*" == *'releases/latest'* ]]; then
+  printf 'gh: Not Found (HTTP 404)\n' >&2
+  exit 1
+fi
 printf '%s\n' '{"tag_name":"v9.8.7"}'
 MOCK_GH
 
@@ -66,6 +74,38 @@ test_check_detects_release() {
   assert_file_line 'upstream_tag=v9.8.7' "$output_file"
   assert_file_line 'upstream_version=9.8.7' "$output_file"
   assert_file_line "archive_sha256=$expected_checksum" "$output_file"
+}
+
+test_check_exits_clean_without_releases() {
+  local output_file="$test_dir/no-releases-output"
+  local log="$test_dir/no-releases.log"
+  local status=0
+
+  MOCK_GH_NO_RELEASES=1 \
+    PATH="$test_dir/bin:$PATH" \
+    PKGBUILD_PATH="$test_dir/PKGBUILD" \
+    GITHUB_OUTPUT="$output_file" \
+    "$PACKAGE_DIR/scripts/check_upstream.sh" >"$log" 2>&1 || status=$?
+
+  [[ $status -eq 0 ]] \
+    || die "an upstream without releases must exit 0 (got $status): $(cat "$log")"
+  grep -q 'nada que actualizar' "$log" \
+    || die "missing the no-releases report: $(cat "$log")"
+  [[ ! -s $output_file ]] \
+    || die "a run without releases must not write outputs: $(cat "$output_file")"
+}
+
+test_check_dies_when_upstream_repo_is_missing() {
+  local log="$test_dir/repo-missing.log"
+  local status=0
+
+  MOCK_GH_NO_RELEASES=1 MOCK_GH_REPO_MISSING=1 \
+    PATH="$test_dir/bin:$PATH" \
+    PKGBUILD_PATH="$test_dir/PKGBUILD" \
+    "$PACKAGE_DIR/scripts/check_upstream.sh" >"$log" 2>&1 || status=$?
+
+  [[ $status -ne 0 ]] \
+    || die "a missing upstream repo must still fail the script: $(cat "$log")"
 }
 
 test_update_changes_version_and_resets_release() {
@@ -110,6 +150,8 @@ test_same_version_checksum_change_increments_release() {
 main() {
   setup
   test_check_detects_release
+  test_check_exits_clean_without_releases
+  test_check_dies_when_upstream_repo_is_missing
   test_update_changes_version_and_resets_release
   test_check_sees_matching_package
   test_same_version_checksum_change_increments_release
