@@ -76,8 +76,9 @@ have 'if-no-files-found: error'
 # Este repo no despacha una fuente: el tarball vendoreado ES la fuente.
 miss 'Checkout the source at the dispatched commit' "$WORKFLOW" \
   'package.yml despacha una fuente externa que este repo no tiene'
-miss 'ready-for-agent' "$WORKFLOW" \
-  'el issue de fallo usa un label que no existe en este repo (solo labels estándar)'
+# El issue de fallo lleva un label que existe en este repo: solo hay labels
+# estándar y gh issue create muere con un label inexistente.
+have '--label bug'
 
 # El orden importa: archlinux:base no trae git, así que las dependencias se
 # instalan antes del primer checkout (el fallback REST deja un árbol sin .git;
@@ -266,6 +267,27 @@ mutated_workflow="$TEST_ROOT/package-without-r-flag.yml"
 sed 's|gh run view -R "$GITHUB_REPOSITORY"|gh run view|' "$WORKFLOW" \
   > "$mutated_workflow"
 expect_fail 'gh run view sin -R' check_failure_report_repo_flag "$mutated_workflow"
+
+# ----------------------------------------------------------------------
+# El issue de fallo lleva un label que exista: estos repos solo tienen
+# labels estándar y gh issue create muere con un label inexistente, así
+# que un fallo real quedaría sin issue.
+# ----------------------------------------------------------------------
+check_failure_issue_label() { # check_failure_issue_label <workflow_file>
+  local script
+  script="$TEST_ROOT/failure-label.sh"
+  extract_run 'Open the failure issue' "$1" > "$script"
+  [[ -s "$script" ]] || die 'no se pudo extraer el paso Open the failure issue'
+  grep -qF -- '--label bug' "$script" || \
+    die 'el issue de fallo no lleva un label que exista en este repo (solo labels estándar; gh issue create muere con un label inexistente)'
+}
+check_failure_issue_label "$WORKFLOW"
+
+# Mutación: sin el label, el check muere.
+mutated_workflow="$TEST_ROOT/package.sin-label.yml"
+sed 's/ --label bug//' "$WORKFLOW" > "$mutated_workflow"
+grep -qF -- '--label bug' "$mutated_workflow" && die 'la mutación del label no se aplicó'
+expect_fail 'issue de fallo sin label' check_failure_issue_label "$mutated_workflow"
 
 # ---------------------------------------------------------------------- #
 # Publicación: el .pkg entra al canal stable de gh-pages con              #
