@@ -364,6 +364,34 @@ sed "/^        if: github.event_name == 'repository_dispatch'$/d" "$WORKFLOW" \
   > "$TEST_ROOT/package.sin-gate.yml"
 expect_fail 'pasos de publicación sin gate' check_publish_gates "$TEST_ROOT/package.sin-gate.yml"
 
+# El push a gh-pages sobrevive una publicación simultánea: dos pipelines
+# del canal pueden publicar casi a la vez y ambas parten del mismo base
+# de gh-pages, y el segundo push muere con non-fast-forward (run real
+# 40798818147 de ravn-home-common-arch, issue #5). El paso debe
+# reintentar hasta 3 veces: traer el gh-pages remoto, re-aplicar la
+# publicación sobre él (publish-artifact + firma; los db son artefactos
+# que repo-add regenera, un rebase no puede fusionarlos) y volver a
+# empujar, con backoff corto, muriendo solo al agotar los reintentos.
+check_push_retry() { # check_push_retry <workflow-path>
+  local wf="$1" run
+  run="$(extract_run 'Sign the databases and push gh-pages' "$wf")"
+  grep -qF 'until git push origin gh-pages; do' <<<"$run" || return 1
+  grep -qF 'retries=3' <<<"$run" || return 1
+  grep -qF 'git fetch origin gh-pages' <<<"$run" || return 1
+  grep -qF 'git reset --hard FETCH_HEAD' <<<"$run" || return 1
+  grep -qF 'publish-artifact --remote' <<<"$run" || return 1
+  grep -qF 'sign_databases' <<<"$run" || return 1
+  grep -qF 'sigue rechazado tras los reintentos' <<<"$run" || return 1
+  return 0
+}
+check_push_retry "$WORKFLOW" || die 'package.yml no reintenta el push a gh-pages ante non-fast-forward'
+
+# Mutación: si el reintento desaparece (queda un push simple), el check
+# muere.
+sed 's|until git push origin gh-pages; do|git push origin gh-pages \&\& exit 0; : |' \
+  "$WORKFLOW" > "$TEST_ROOT/package.sin-reintento.yml"
+expect_fail 'un push a gh-pages sin reintento' check_push_retry "$TEST_ROOT/package.sin-reintento.yml"
+
 # Los pasos de publicación y el issue de fallo son bash válido.
 for step in 'Publish the package into the stable channel' \
             'Prune the channel to the last N packages' \

@@ -279,26 +279,29 @@ jobs:
           set -euo pipefail
 
           cd repo
-          # GitHub Pages no sirve symlinks: el db y los files van como copias.
-          for f in stable/x86_64/omarchy.db stable/x86_64/omarchy.files; do
-            if [[ -L "$f" ]]; then
-              rl="$(readlink "$f")"
-              rm -f "$f"
-              cp -L "$(dirname "$f")/$rl" "$f"
-            fi
-          done
-          export GNUPGHOME="$(mktemp -d)"
-          gpg --batch --quiet --import <<<"$GPG_PRIVATE_KEY"
-          gpg --batch --yes --detach-sign --armor --output stable/x86_64/omarchy.db.sig stable/x86_64/omarchy.db
-          gpg --batch --yes --detach-sign --armor --output stable/x86_64/omarchy.files.sig stable/x86_64/omarchy.files
-          # El pacman.conf del fork usa la sección [omarchy-personal]: el db
-          # se publica también con ese nombre para que el repo sombreado
-          # resuelva.
-          cp stable/x86_64/omarchy.db stable/x86_64/omarchy-personal.db
-          cp stable/x86_64/omarchy.files stable/x86_64/omarchy-personal.files
-          gpg --batch --yes --detach-sign --armor --output stable/x86_64/omarchy-personal.db.sig stable/x86_64/omarchy-personal.db
-          gpg --batch --yes --detach-sign --armor --output stable/x86_64/omarchy-personal.files.sig stable/x86_64/omarchy-personal.files
-          rm -rf "$GNUPGHOME"
+          sign_databases() {
+            # GitHub Pages no sirve symlinks: el db y los files van como copias.
+            for f in stable/x86_64/omarchy.db stable/x86_64/omarchy.files; do
+              if [[ -L "$f" ]]; then
+                rl="$(readlink "$f")"
+                rm -f "$f"
+                cp -L "$(dirname "$f")/$rl" "$f"
+              fi
+            done
+            export GNUPGHOME="$(mktemp -d)"
+            gpg --batch --quiet --import <<<"$GPG_PRIVATE_KEY"
+            gpg --batch --yes --detach-sign --armor --output stable/x86_64/omarchy.db.sig stable/x86_64/omarchy.db
+            gpg --batch --yes --detach-sign --armor --output stable/x86_64/omarchy.files.sig stable/x86_64/omarchy.files
+            # El pacman.conf del fork usa la sección [omarchy-personal]: el db
+            # se publica también con ese nombre para que el repo sombreado
+            # resuelva.
+            cp stable/x86_64/omarchy.db stable/x86_64/omarchy-personal.db
+            cp stable/x86_64/omarchy.files stable/x86_64/omarchy-personal.files
+            gpg --batch --yes --detach-sign --armor --output stable/x86_64/omarchy-personal.db.sig stable/x86_64/omarchy-personal.db
+            gpg --batch --yes --detach-sign --armor --output stable/x86_64/omarchy-personal.files.sig stable/x86_64/omarchy-personal.files
+            rm -rf "$GNUPGHOME"
+          }
+          sign_databases
           git config user.name "Roberto Flores"
           git config user.email "25asab015@ujmd.edu.sv"
           git add -A
@@ -306,7 +309,37 @@ jobs:
             echo "sin cambios en gh-pages: el canal ya sirve esta versión"
           else
             git commit -m "publish: ${PKG_NAME} ${PKG_VER}"
-            git push origin gh-pages
+            # Dos pipelines del canal pueden publicar casi a la vez: ambas
+            # parten del mismo base de gh-pages y el segundo push muere con
+            # non-fast-forward (run real 40798818147). Los db son artefactos
+            # que repo-add regenera, así que un rebase no puede fusionar los
+            # dos commits: la resolución es re-aplicar la publicación sobre
+            # el gh-pages remoto (publish-artifact sobre el árbol remoto +
+            # firma) y empujar de nuevo. Hasta 3 reintentos con backoff
+            # corto; solo muere al agotarlos.
+            pkg_files=( "$GITHUB_WORKSPACE"/build/*.pkg.tar.zst )
+            if (( ${#pkg_files[@]} != 1 )) || [[ ! -e "${pkg_files[0]}" ]]; then
+              echo "no quedó exactamente un .pkg.tar.zst para re-publicar" >&2
+              exit 1
+            fi
+            retries=3
+            until git push origin gh-pages; do
+              if (( retries == 0 )); then
+                echo "el push a gh-pages sigue rechazado tras los reintentos" >&2
+                exit 1
+              fi
+              : $(( retries -= 1 ))
+              sleep $(( (3 - retries) * 2 ))
+              git fetch origin gh-pages
+              git reset --hard FETCH_HEAD
+              git clean -fd
+              ( cd "$GITHUB_WORKSPACE" && bash omarchy-pkgs/bin/publish-artifact --remote "$GITHUB_WORKSPACE/repo" --mirror stable --arch x86_64 "${pkg_files[0]}" )
+              sign_databases
+              git add -A
+              if ! git diff --cached --quiet; then
+                git commit -m "publish: ${PKG_NAME} ${PKG_VER}"
+              fi
+            done
           fi
 
       # Fallo de build, prueba o publicación → issue automático en este repo
