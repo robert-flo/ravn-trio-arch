@@ -28,20 +28,32 @@ jobs:
           su builder --shell /bin/bash --command "cd '$GITHUB_WORKSPACE' && git config --global --add safe.directory '$GITHUB_WORKSPACE' && make lint"
       - name: Automatización upstream (offline)
         run: tests/test-upstream-automation.sh
+      - name: Contrato de package.yml y del PKGBUILD
+        run: tests/test-package-workflow.sh
 
   package:
     name: Build + install en Arch (Docker)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # La fuente es privada: el tarball vendoreado ES la fuente del paquete.
-      - name: Checksum y código fuente del tarball vendoreado
+      # La fuente es el archivo público del tag que declara el PKGBUILD (vía
+      # .SRCINFO): se baja, se verifica contra el sha256 fijado y se convierte
+      # en un checkout git para validate-local-install.sh.
+      - name: Fuente del tag verificada contra el sha256 del PKGBUILD
         run: |
+          set -Eeuo pipefail
           pkgver="$(awk -F= '/^pkgver=/{print $2; exit}' PKGBUILD)"
           sha="$(awk -F "'" '/^sha256sums=/{f=1} f && /[0-9a-f]{64}/{print $2; exit}' PKGBUILD)"
-          echo "$sha  ravn-trio-${pkgver}.tar.gz" | sha256sum -c -
+          src="$(awk -F ' = ' '$1 == "\tsource" {print $2; exit}' .SRCINFO)"
+          name="${src%%::*}"
+          url="${src#*::}"
+          [[ "$name" == "ravn-trio-${pkgver}.tar.gz" ]]
+          [[ "$url" == "https://github.com/robert-flo/ravn-trio/archive/refs/tags/v${pkgver}.tar.gz" ]]
+          curl --fail --location --silent --show-error --retry 3 --retry-delay 2 \
+            "$url" --output "$RUNNER_TEMP/$name"
+          echo "$sha  $RUNNER_TEMP/$name" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/src"
-          tar -xzf "ravn-trio-${pkgver}.tar.gz" -C "$RUNNER_TEMP/src" --strip-components=1
+          tar -xzf "$RUNNER_TEMP/$name" -C "$RUNNER_TEMP/src" --strip-components=1
           git -C "$RUNNER_TEMP/src" init -q
           git -C "$RUNNER_TEMP/src" add -A
           git -C "$RUNNER_TEMP/src" -c user.name=ci -c user.email=ci@localhost commit -q -m "v${pkgver}"

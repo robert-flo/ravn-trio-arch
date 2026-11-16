@@ -147,6 +147,7 @@ endif
 # ═══════════════════════════════════════════════════════════════
 test-automation: ## Test upstream package automation with local fixtures
 	@tests/test-upstream-automation.sh
+	@tests/test-package-workflow.sh
 
 # ═══════════════════════════════════════════════════════════════
 # 🔄 UPDATE-UPSTREAM - Apply the detected upstream release locally

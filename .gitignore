@@ -2,4 +2,3 @@ pkg/
 src/
 *.pkg.tar.*
 ravn-trio-*.tar.gz
-!ravn-trio-*.*.*.tar.gz
