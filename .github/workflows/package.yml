@@ -1,14 +1,18 @@
-name: Package from vendored source
+name: Package from upstream tag
 
 # Empaquetado y publicación del .pkg de ravn-trio (issue #9), con el patrón
-# que ya funciona en pj-domina-rf-git-setup-arch. La diferencia de este repo:
-# el tarball vendoreado ES la fuente, así que no hay checkout de otro repo ni
-# derivación de versión: makepkg construye el PKGBUILD tal cual (la versión
-# vive en el PKGBUILD y sube con cada release), el .pkg se prueba instalado
-# y, en repository_dispatch, entra al canal stable de omarchy-personal-repo
-# con el toolkit de omarchy-pkgs (bin/publish-artifact contra un remote
-# rclone local, el mismo patrón de release-personal.yml). workflow_dispatch
-# permite repetirlo a mano: construye e instala pero NO publica.
+# que ya funciona en pj-domina-rf-git-setup-arch. La fuente es el archivo
+# público del tag de robert-flo/ravn-trio que declara el PKGBUILD: makepkg lo
+# baja y verifica su sha256, así que el paquete construido es siempre la
+# versión del PKGBUILD (la sube update-upstream.yml), sin importar el sha que
+# traiga el dispatch. El .pkg se prueba instalado y, en repository_dispatch,
+# entra al canal stable de omarchy-personal-repo con el toolkit de
+# omarchy-pkgs (bin/publish-artifact contra un remote rclone local, el mismo
+# patrón de release-personal.yml), salvo que el canal ya sirva ese mismo
+# pkgver-pkgrel: entonces no se republica. Despachan source-updated: el CI
+# verde de ravn-trio (cada merge a main) y update-upstream.yml tras subir la
+# versión. workflow_dispatch permite repetirlo a mano: construye e instala
+# pero NO publica.
 
 on:
   repository_dispatch:
@@ -51,25 +55,22 @@ jobs:
         run: |
           set -euo pipefail
 
-          # El tarball vendoreado es la fuente: exactamente uno, y el
-          # PKGBUILD debe declararlo (un release viejo olvidado se nota acá,
-          # no en makepkg).
-          tarballs=( ravn-trio-*.tar.gz )
-          if (( ${#tarballs[@]} != 1 )) || [[ ! -e "${tarballs[0]}" ]]; then
-            echo "no quedó exactamente un tarball vendoreado en la raíz del repo" >&2
+          # La fuente es el archivo del tag que declara el PKGBUILD: makepkg
+          # lo baja y verifica el sha256. Un tarball vendoreado o un source
+          # local (el esquema viejo de fuente privada) muere acá, no en
+          # makepkg.
+          vendored=( ravn-trio-*.tar.gz )
+          if [[ -e "${vendored[0]}" ]]; then
+            echo "quedó un tarball vendoreado en la raíz del repo: ${vendored[*]}" >&2
             exit 1
           fi
-          # El PKGBUILD declara el source parametrizado
-          # ("${pkgname}-${pkgver}.tar.gz"): la guardia deriva el nombre
-          # esperado de pkgver, no de un literal.
-          pkgver="$(awk -F= '/^pkgver=/{print $2; exit}' PKGBUILD)"
-          [[ "${tarballs[0]}" == "ravn-trio-${pkgver}.tar.gz" ]] || {
-            echo "el tarball vendoreado no coincide con pkgver del PKGBUILD: ${tarballs[0]} vs ravn-trio-${pkgver}.tar.gz" >&2
+          grep -qF 'source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")' PKGBUILD || {
+            echo "el PKGBUILD no declara el archivo del tag de GitHub como source" >&2
             exit 1
           }
 
           mkdir -p "${PKG_BUILD}"
-          cp PKGBUILD "${tarballs[0]}" "${PKG_BUILD}/"
+          cp PKGBUILD "${PKG_BUILD}/"
 
       - name: Build the package and install-test it
         id: build
@@ -166,9 +167,42 @@ jobs:
           path: repo
           ssh-key: ${{ secrets.SSH_DEPLOY_KEY }}
 
+      # Idempotencia: el CI de ravn-trio despacha en cada merge a main, haya
+      # o no versión nueva, y el PKGBUILD solo cambia cuando
+      # update-upstream.yml sube la versión. Si el db del canal ya sirve el
+      # mismo archivo (pkgname-pkgver-pkgrel-arch), publicar, podar y firmar
+      # se saltan: sin commit nuevo en gh-pages ni .pkg pisado.
+      - name: Check whether the channel already serves this package
+        id: channel
+        if: github.event_name == 'repository_dispatch'
+        env:
+          CHANNEL: ${{ github.workspace }}/repo/stable/x86_64
+        run: |
+          set -euo pipefail
+
+          pkg_files=( build/*.pkg.tar.zst )
+          if (( ${#pkg_files[@]} != 1 )) || [[ ! -e "${pkg_files[0]}" ]]; then
+            echo "no quedó exactamente un .pkg.tar.zst para comparar con el canal" >&2
+            exit 1
+          fi
+          pkgfile="$(basename "${pkg_files[0]}")"
+          db="$CHANNEL/omarchy.db.tar.zst"
+          served=""
+          if [[ -f "$db" ]]; then
+            served="$(tar -xO -f "$db" --wildcards '*/desc' 2>/dev/null | awk '/^%FILENAME%$/{getline; print}' || true)"
+          fi
+          published=false
+          if [[ -f "$CHANNEL/$pkgfile" ]] && grep -qxF "$pkgfile" <<<"$served"; then
+            published=true
+            echo "el canal ya sirve $pkgfile: no se republica"
+          else
+            echo "el canal no sirve $pkgfile: se publica"
+          fi
+          printf 'published=%s\n' "$published" >> "$GITHUB_OUTPUT"
+
       - name: Publish the package into the stable channel
         id: publish
-        if: github.event_name == 'repository_dispatch'
+        if: github.event_name == 'repository_dispatch' && steps.channel.outputs.published != 'true'
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
@@ -194,7 +228,7 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
       - name: Prune the channel to the last N packages
-        if: github.event_name == 'repository_dispatch'
+        if: github.event_name == 'repository_dispatch' && steps.channel.outputs.published != 'true'
         env:
           REPO_DIR: ${{ github.workspace }}/repo
           PKG_NAMES: ${{ steps.publish.outputs.pkgname }}
@@ -269,7 +303,7 @@ jobs:
           echo "poda lista: últimos $KEEP_N paquetes por pkgname en stable/x86_64"
 
       - name: Sign the databases and push gh-pages
-        if: github.event_name == 'repository_dispatch'
+        if: github.event_name == 'repository_dispatch' && steps.channel.outputs.published != 'true'
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}

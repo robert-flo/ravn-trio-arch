@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 PACKAGE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 readonly PACKAGE_DIR
+# shellcheck disable=SC2016 # Literal PKGBUILD line, expanded by makepkg.
+readonly SOURCE_LINE='source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")'
 
 test_dir=""
 
@@ -120,6 +122,24 @@ test_update_changes_version_and_resets_release() {
   assert_file_line 'pkgver=9.8.7' "$test_dir/PKGBUILD"
   assert_file_line 'pkgrel=1' "$test_dir/PKGBUILD"
   assert_file_line "  '$checksum'" "$test_dir/PKGBUILD"
+  # The source stays the parametrized tag archive, so the bumped pkgver is
+  # exactly what makepkg downloads (no vendored tarball to refresh).
+  assert_file_line "$SOURCE_LINE" "$test_dir/PKGBUILD"
+}
+
+test_pkgbuild_uses_tag_archive() {
+  assert_file_line "$SOURCE_LINE" "$PACKAGE_DIR/PKGBUILD"
+  assert_file_line "url='https://github.com/robert-flo/ravn-trio'" "$PACKAGE_DIR/PKGBUILD"
+}
+
+test_workflow_chains_publication() {
+  local workflow="$PACKAGE_DIR/.github/workflows/update-upstream.yml"
+  assert_file_line '      - upstream-released' "$workflow"
+  grep -qF 'echo "pushed=true" >>' "$workflow" \
+    || die "update-upstream.yml does not record the metadata push"
+  assert_file_line "        if: steps.commit.outputs.pushed == 'true'" "$workflow"
+  grep -qF -- '-f event_type=source-updated' "$workflow" \
+    || die "update-upstream.yml does not dispatch source-updated after the push"
 }
 
 test_check_sees_matching_package() {
@@ -149,6 +169,8 @@ test_same_version_checksum_change_increments_release() {
 
 main() {
   setup
+  test_pkgbuild_uses_tag_archive
+  test_workflow_chains_publication
   test_check_detects_release
   test_check_exits_clean_without_releases
   test_check_dies_when_upstream_repo_is_missing

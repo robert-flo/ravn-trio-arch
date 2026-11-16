@@ -1,8 +1,17 @@
 name: Update package from upstream release
 
+# Cadena automática: release nuevo en ravn-trio (release.yml despacha
+# upstream-released; el cron diario es la red) → check_upstream.sh compara el
+# tag con el PKGBUILD → update_package.sh sube pkgver/sha256 → makepkg baja el
+# archivo del tag y construye → commit a main → repository_dispatch
+# source-updated a este repo → package.yml publica en omarchy-personal-repo.
+
 on:
   schedule:
     - cron: "23 6 * * *"
+  repository_dispatch:
+    types:
+      - upstream-released
   workflow_dispatch:
 
 permissions:
@@ -101,6 +110,7 @@ jobs:
           path: "*.pkg.tar.zst"
 
       - name: Commit package metadata
+        id: commit
         if: steps.check.outputs.changed == 'true'
         env:
           PKGVER: ${{ steps.update.outputs.pkgver }}
@@ -120,3 +130,20 @@ jobs:
               commit -m "chore: update package to v${PKGVER}-${PKGREL}"
           git pull --rebase origin "$GITHUB_REF_NAME"
           git push origin "HEAD:$GITHUB_REF_NAME"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      # Un push con GITHUB_TOKEN no dispara workflows, pero un
+      # repository_dispatch sí: así package.yml publica la versión recién
+      # commiteada sin esperar al próximo merge de ravn-trio.
+      - name: Dispatch the package publication
+        if: steps.commit.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PKGVER: ${{ steps.update.outputs.pkgver }}
+          PKGREL: ${{ steps.update.outputs.pkgrel }}
+        run: |
+          set -Eeuo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f event_type=source-updated \
+            -f "client_payload[reason]=update-upstream subió el paquete a v${PKGVER}-${PKGREL}"
+          echo "despachado source-updated: package.yml publica v${PKGVER}-${PKGREL}."

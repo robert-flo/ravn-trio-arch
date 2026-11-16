@@ -3,9 +3,11 @@
 
 # Contrato offline del pipeline de empaquetado y publicación del .pkg
 # (package.yml, issue #9): estructura del workflow, consistencia
-# PKGBUILD/.SRCINFO/tarball vendoreado, el package() real del PKGBUILD contra
-# el tarball commiteado, y el contrato de publicación en stable/x86_64 de
-# omarchy-personal-repo. Cada aserción dura lleva su caso por mutación.
+# PKGBUILD/.SRCINFO con el archivo del tag de GitHub, el package() real del
+# PKGBUILD contra ese archivo (se baja y se verifica su sha256), la
+# idempotencia de la publicación y el contrato de publicación en
+# stable/x86_64 de omarchy-personal-repo. Cada aserción dura lleva su caso
+# por mutación.
 
 set -Eeuo pipefail
 
@@ -55,14 +57,15 @@ extract_run() {
 }
 
 # Estructura de package.yml: triggers sin push, contenedor Arch, build desde
-# el tarball vendoreado, install-test del .pkg, artifact y publicación.
+# el archivo del tag que declara el PKGBUILD, install-test del .pkg, artifact
+# y publicación.
 have 'repository_dispatch:'
 have 'source-updated'
 have 'workflow_dispatch:'
 have 'image: archlinux:base'
 have 'Checkout this package repository'
-have 'no quedó exactamente un tarball vendoreado'
-have 'no coincide con pkgver del PKGBUILD'
+have 'quedó un tarball vendoreado en la raíz del repo'
+have 'el PKGBUILD no declara el archivo del tag de GitHub como source'
 have 'makepkg --nodeps'
 have 'pacman -U --noconfirm --nodeps --nodeps'
 have '/usr/bin/pj-trio'
@@ -73,7 +76,8 @@ have 'pj-trio help'
 have 'actions/upload-artifact@v4'
 have 'path: build/*.pkg.tar.zst'
 have 'if-no-files-found: error'
-# Este repo no despacha una fuente: el tarball vendoreado ES la fuente.
+# La fuente la declara el PKGBUILD (archivo del tag): no hay checkout de la
+# fuente en el sha despachado.
 miss 'Checkout the source at the dispatched commit' "$WORKFLOW" \
   'package.yml despacha una fuente externa que este repo no tiene'
 # El issue de fallo lleva un label que existe en este repo: solo hay labels
@@ -90,39 +94,39 @@ checkout_line="$(grep -n '      - name: Checkout this package repository' "$WORK
   die 'las dependencias van antes del checkout (la imagen base no trae git)'
 
 # ---------------------------------------------------------------------- #
-# Contrato del paquete: exactamente un tarball vendoreado, y la versión,  #
-# el nombre de source y el sha256 coinciden entre el archivo real, el     #
-# PKGBUILD y el .SRCINFO. Un release bumped a medias se nota acá.         #
+# Contrato del paquete: la fuente es el archivo público del tag de        #
+# ravn-trio (sin tarball vendoreado en el repo), y la versión, el source  #
+# y el sha256 coinciden entre el PKGBUILD y el .SRCINFO. Un bump a medias #
+# se nota acá.                                                             #
 # ---------------------------------------------------------------------- #
-tarballs=("$PACKAGE_DIR"/ravn-trio-*.tar.gz)
-if (( ${#tarballs[@]} != 1 )) || [[ ! -e "${tarballs[0]}" ]]; then
-  die 'no hay exactamente un tarball vendoreado en la raíz del repo'
-fi
-tarball="$(basename "${tarballs[0]}")"
+readonly SOURCE_LINE='source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")'
+vendored=("$PACKAGE_DIR"/ravn-trio-*.tar.gz)
+[[ ! -e "${vendored[0]}" ]] || \
+  die "quedó un tarball vendoreado en la raíz del repo: ${vendored[*]}"
 pkgver="$(awk -F= '/^pkgver=/{print $2; exit}' "$PACKAGE_DIR/PKGBUILD")"
 pkgrel="$(awk -F= '/^pkgrel=/{print $2; exit}' "$PACKAGE_DIR/PKGBUILD")"
-[[ "$tarball" == "ravn-trio-${pkgver}.tar.gz" ]] || \
-  die "el tarball vendoreado ($tarball) no coincide con pkgver del PKGBUILD ($pkgver)"
 [[ "$pkgver" =~ ^[0-9]+([.][0-9]+)*$ ]] || die "pkgver inválido: $pkgver"
 [[ "$pkgrel" =~ ^[0-9]+$ ]] || die "pkgrel inválido: $pkgrel"
-grep -qF 'source=("${pkgname}-${pkgver}.tar.gz")' "$PACKAGE_DIR/PKGBUILD" || \
-  die 'el PKGBUILD no declara el tarball vendoreado parametrizado en source'
-real_sha="$(sha256sum "${tarballs[0]}" | awk '{print $1}')"
+grep -qxF "url='https://github.com/robert-flo/ravn-trio'" "$PACKAGE_DIR/PKGBUILD" || \
+  die 'el PKGBUILD no apunta url al repo público de ravn-trio'
+grep -qxF "$SOURCE_LINE" "$PACKAGE_DIR/PKGBUILD" || \
+  die 'el PKGBUILD no declara el archivo del tag de GitHub en source'
+tarball="ravn-trio-${pkgver}.tar.gz"
+archive_url="https://github.com/robert-flo/ravn-trio/archive/refs/tags/v${pkgver}.tar.gz"
 pkgb_sha="$(grep -oE '[0-9a-f]{64}' "$PACKAGE_DIR/PKGBUILD" | head -1)"
 srcinfo_sha="$(awk '/^\tsha256sums = /{print $3; exit}' "$PACKAGE_DIR/.SRCINFO")"
-[[ "$pkgb_sha" == "$real_sha" ]] || \
-  die "el sha256 del PKGBUILD no es el del tarball commiteado: $pkgb_sha != $real_sha"
-[[ "$srcinfo_sha" == "$real_sha" ]] || \
-  die "el sha256 del .SRCINFO no es el del tarball commiteado: $srcinfo_sha != $real_sha"
+[[ "$pkgb_sha" =~ ^[0-9a-f]{64}$ ]] || die 'el PKGBUILD no fija un sha256 para el archivo del tag'
+[[ "$srcinfo_sha" == "$pkgb_sha" ]] || \
+  die "el sha256 del .SRCINFO no es el del PKGBUILD: $srcinfo_sha != $pkgb_sha"
 grep -qE "^$(printf '\t')pkgver = ${pkgver}$" "$PACKAGE_DIR/.SRCINFO" || \
   die '.SRCINFO pkgver no coincide con el PKGBUILD'
 grep -qE "^$(printf '\t')pkgrel = ${pkgrel}$" "$PACKAGE_DIR/.SRCINFO" || \
   die '.SRCINFO pkgrel no coincide con el PKGBUILD'
-grep -qE "^$(printf '\t')source = ${tarball}$" "$PACKAGE_DIR/.SRCINFO" || \
-  die '.SRCINFO source no declara el tarball vendoreado'
+grep -qxF "$(printf '\t')source = ${tarball}::${archive_url}" "$PACKAGE_DIR/.SRCINFO" || \
+  die '.SRCINFO source no declara el archivo del tag de GitHub'
 
-# El paso de staging es bash válido y corre de verdad: deja PKGBUILD y el
-# tarball en el build dir, con su guardia de tarball único.
+# El paso de staging es bash válido y corre de verdad: deja el PKGBUILD en
+# el build dir y muere con un tarball vendoreado o un source local.
 stage_script="$TEST_ROOT/stage.sh"
 extract_run 'Stage the build directory' > "$stage_script"
 [[ -s "$stage_script" ]] || die 'no se pudo extraer el paso de staging de package.yml'
@@ -136,15 +140,20 @@ run_stage() { # run_stage <repo_dir> <build_dir>
 }
 stage_repo="$TEST_ROOT/stage-repo"
 mkdir -p "$stage_repo"
-cp "$PACKAGE_DIR/PKGBUILD" "$PACKAGE_DIR/$tarball" "$stage_repo/"
+cp "$PACKAGE_DIR/PKGBUILD" "$stage_repo/"
 run_stage "$stage_repo" "$TEST_ROOT/build-stage"
-[[ -f "$TEST_ROOT/build-stage/PKGBUILD" && -f "$TEST_ROOT/build-stage/$tarball" ]] || \
-  die 'el staging no dejó PKGBUILD y tarball en el build dir'
-# Mutación: un tarball viejo olvidado en la raíz debe morir en la guardia.
-cp -r "$stage_repo" "$TEST_ROOT/stage-repo-doble"
-: > "$TEST_ROOT/stage-repo-doble/ravn-trio-9.9.9.tar.gz"
-expect_fail 'dos tarballs vendoreados en la raíz' \
-  run_stage "$TEST_ROOT/stage-repo-doble" "$TEST_ROOT/build-stage-doble"
+[[ -f "$TEST_ROOT/build-stage/PKGBUILD" ]] || \
+  die 'el staging no dejó el PKGBUILD en el build dir'
+# Mutación: un tarball vendoreado olvidado en la raíz debe morir en la guardia.
+cp -r "$stage_repo" "$TEST_ROOT/stage-repo-vendoreado"
+: > "$TEST_ROOT/stage-repo-vendoreado/ravn-trio-9.9.9.tar.gz"
+expect_fail 'un tarball vendoreado en la raíz' \
+  run_stage "$TEST_ROOT/stage-repo-vendoreado" "$TEST_ROOT/build-stage-vendoreado"
+# Mutación: un PKGBUILD con source local (el esquema viejo) muere en la guardia.
+cp -r "$stage_repo" "$TEST_ROOT/stage-repo-local"
+sed -i 's|^source=.*|source=("${pkgname}-${pkgver}.tar.gz")|' "$TEST_ROOT/stage-repo-local/PKGBUILD"
+expect_fail 'un PKGBUILD con source local' \
+  run_stage "$TEST_ROOT/stage-repo-local" "$TEST_ROOT/build-stage-local"
 
 # El paso de build/install es bash válido (el resto corre en el contenedor
 # real del CI: pacman y makepkg no existen acá).
@@ -154,17 +163,26 @@ extract_run 'Build the package and install-test it' > "$build_script"
 bash -n "$build_script" || die 'el paso de build no es bash válido'
 
 # ---------------------------------------------------------------------- #
-# package() funciona: contra el tarball vendoreado commiteado se corre el  #
-# package() real del PKGBUILD con DESTDIR temporal (el WK nunca instala   #
-# en el sistema) y se fuma el payload staged con el mismo contrato de     #
-# tests/lib/container-validate.sh.                                        #
+# package() funciona: contra el archivo del tag (bajado y verificado con  #
+# el sha256 del PKGBUILD; RAVN_TRIO_ARCHIVE apunta a una copia local) se  #
+# corre el package() real del PKGBUILD con DESTDIR temporal (el WK nunca  #
+# instala en el sistema) y se fuma el payload staged con el mismo         #
+# contrato de tests/lib/container-validate.sh.                            #
 # ---------------------------------------------------------------------- #
+archive="${RAVN_TRIO_ARCHIVE:-$TEST_ROOT/$tarball}"
+if [[ ! -f "$archive" ]]; then
+  curl --fail --location --silent --show-error --retry 3 --retry-delay 2 \
+    "$archive_url" --output "$archive" || die "no se pudo bajar $archive_url"
+fi
+real_sha="$(sha256sum "$archive" | awk '{print $1}')"
+[[ "$real_sha" == "$pkgb_sha" ]] || \
+  die "el sha256 del PKGBUILD no es el del archivo del tag: $pkgb_sha != $real_sha"
 srcroot="$TEST_ROOT/pkg-src"
 rm -rf "$srcroot"
 mkdir -p "$srcroot"
-tar -xzf "$PACKAGE_DIR/$tarball" -C "$srcroot"
+tar -xzf "$archive" -C "$srcroot"
 [[ -d "$srcroot/ravn-trio-${pkgver}" ]] || \
-  die "el tarball no descomprime con la raíz que el package() espera: ravn-trio-${pkgver}/"
+  die "el archivo del tag no descomprime con la raíz que el package() espera: ravn-trio-${pkgver}/"
 
 run_package() { # run_package <pkgdir> <pkgbuild>
   (
@@ -327,26 +345,36 @@ publish_checks() { # publish_checks <workflow-path>
 }
 publish_checks "$WORKFLOW" || die 'package.yml no cumple el contrato de publicación en omarchy-personal-repo'
 
-# El gate de repository_dispatch vive pegado a cada paso de publicación.
+# El gate de repository_dispatch vive pegado a cada paso de publicación;
+# los que escriben el canal llevan además el gate de idempotencia (no se
+# republica un pkgver-pkgrel que el canal ya sirve).
+readonly DISPATCH_GATE="        if: github.event_name == 'repository_dispatch'"
+readonly WRITE_GATE="        if: github.event_name == 'repository_dispatch' && steps.channel.outputs.published != 'true'"
+step_has_gate() { # step_has_gate <workflow-path> <step> <gate>
+  local wf="$1" step="$2" gate="$3" line off
+  line="$(grep -nF "      - name: $step" "$wf" | cut -d: -f1)"
+  [[ -n "$line" ]] || return 1
+  # El gate va pegado al paso, pero puede quedar tras un id: o un env:
+  # del propio paso; mirar las tres líneas siguientes alcanza.
+  for off in 1 2 3; do
+    if [[ "$(sed -n "$((line + off))p" "$wf")" == "$gate" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 check_publish_gates() { # check_publish_gates <workflow-path>
-  local wf="$1" step line
+  local wf="$1" step
   for step in 'Install the publish tooling' \
               'Checkout the omarchy-pkgs publish tooling' \
               'Checkout the personal repo (gh-pages)' \
-              'Publish the package into the stable channel' \
+              'Check whether the channel already serves this package'; do
+    step_has_gate "$wf" "$step" "$DISPATCH_GATE" || return 1
+  done
+  for step in 'Publish the package into the stable channel' \
               'Prune the channel to the last N packages' \
               'Sign the databases and push gh-pages'; do
-    line="$(grep -nF "      - name: $step" "$wf" | cut -d: -f1)"
-    [[ -n "$line" ]] || return 1
-    # El gate va pegado al paso, pero puede quedar tras un id: o un env:
-    # del propio paso; mirar las tres líneas siguientes alcanza.
-    local off found=0
-    for off in 1 2 3; do
-      if [[ "$(sed -n "$((line + off))p" "$wf")" == "        if: github.event_name == 'repository_dispatch'" ]]; then
-        found=1
-      fi
-    done
-    (( found == 1 )) || return 1
+    step_has_gate "$wf" "$step" "$WRITE_GATE" || return 1
   done
   return 0
 }
@@ -360,9 +388,66 @@ expect_fail 'publish sin publish-artifact' publish_checks "$TEST_ROOT/package.mu
 
 # Mutación: si el gate se pierde, el dogfooding por workflow_dispatch
 # publicaría; el check por paso lo detecta.
-sed "/^        if: github.event_name == 'repository_dispatch'$/d" "$WORKFLOW" \
+sed "/^        if: github.event_name == 'repository_dispatch'/d" "$WORKFLOW" \
   > "$TEST_ROOT/package.sin-gate.yml"
 expect_fail 'pasos de publicación sin gate' check_publish_gates "$TEST_ROOT/package.sin-gate.yml"
+
+# Mutación: sin el gate de idempotencia, cada merge de ravn-trio
+# republicaría la misma versión; el check lo detecta.
+sed "s/ \&\& steps.channel.outputs.published != 'true'//" "$WORKFLOW" \
+  > "$TEST_ROOT/package.sin-idempotencia.yml"
+grep -qF "steps.channel.outputs.published" "$TEST_ROOT/package.sin-idempotencia.yml" && \
+  die 'la mutación del gate de idempotencia no se aplicó'
+expect_fail 'publicación sin gate de idempotencia' check_publish_gates "$TEST_ROOT/package.sin-idempotencia.yml"
+
+# El chequeo de idempotencia corre de verdad: contra un canal de juguete con
+# db (tar con desc), published=true solo si el db sirve el mismo archivo y
+# el archivo está en el árbol.
+channel_script="$TEST_ROOT/channel.sh"
+extract_run 'Check whether the channel already serves this package' > "$channel_script"
+[[ -s "$channel_script" ]] || die 'no se pudo extraer el chequeo del canal de package.yml'
+bash -n "$channel_script" || die 'el chequeo del canal no es bash válido'
+run_channel_check() { # run_channel_check <ws> <channel>: imprime published=
+  (
+    set -Eeuo pipefail
+    cd "$1"
+    : > "$1/channel-output"
+    CHANNEL="$2" GITHUB_OUTPUT="$1/channel-output" bash "$channel_script" > /dev/null
+    cat "$1/channel-output"
+  )
+}
+make_served_db() { # make_served_db <db_path> <filename servido>...
+  local db="$1" dir; shift
+  dir="$(mktemp -d "$TEST_ROOT/served-db.XXXXXX")"
+  local f
+  for f in "$@"; do
+    mkdir -p "$dir/${f%.pkg.tar.zst}"
+    printf '%%FILENAME%%\n%s\n' "$f" > "$dir/${f%.pkg.tar.zst}/desc"
+  done
+  ( cd "$dir" && find . -name desc | sed 's|^\./||' | tar -cf "$db" -T - )
+}
+cws="$TEST_ROOT/channel-ws"
+mkdir -p "$cws/build" "$cws/ch"
+built='ravn-trio-0.1.7-1-any.pkg.tar.zst'
+: > "$cws/build/$built"
+# Caso: el canal ya sirve el mismo archivo → no se republica.
+: > "$cws/ch/$built"
+make_served_db "$cws/ch/omarchy.db.tar.zst" "$built" 'omarchy-4.0.6-109-x86_64.pkg.tar.zst'
+[[ "$(run_channel_check "$cws" "$cws/ch")" == 'published=true' ]] || \
+  die 'el chequeo del canal no reconoce una versión ya publicada'
+# Caso: el canal sirve otra versión → se publica.
+make_served_db "$cws/ch/omarchy.db.tar.zst" 'ravn-trio-0.1.6-1-any.pkg.tar.zst'
+[[ "$(run_channel_check "$cws" "$cws/ch")" == 'published=false' ]] || \
+  die 'el chequeo del canal saltó una versión que el db no sirve'
+# Caso: el db lo sirve pero el archivo no está en el árbol → se publica.
+make_served_db "$cws/ch/omarchy.db.tar.zst" "$built"
+rm -f "$cws/ch/$built"
+[[ "$(run_channel_check "$cws" "$cws/ch")" == 'published=false' ]] || \
+  die 'el chequeo del canal saltó una versión cuyo archivo falta en el árbol'
+# Caso: canal sin db todavía → se publica.
+rm -f "$cws/ch/omarchy.db.tar.zst"
+[[ "$(run_channel_check "$cws" "$cws/ch")" == 'published=false' ]] || \
+  die 'el chequeo del canal no publica en un canal sin db'
 
 # El push a gh-pages sobrevive una publicación simultánea: dos pipelines
 # del canal pueden publicar casi a la vez y ambas parten del mismo base
@@ -393,7 +478,8 @@ sed 's|until git push origin gh-pages; do|git push origin gh-pages \&\& exit 0; 
 expect_fail 'un push a gh-pages sin reintento' check_push_retry "$TEST_ROOT/package.sin-reintento.yml"
 
 # Los pasos de publicación y el issue de fallo son bash válido.
-for step in 'Publish the package into the stable channel' \
+for step in 'Check whether the channel already serves this package' \
+            'Publish the package into the stable channel' \
             'Prune the channel to the last N packages' \
             'Sign the databases and push gh-pages' \
             'Collect the failure log' \
