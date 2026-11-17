@@ -1,5 +1,5 @@
 pkgname=ravn-trio
-pkgver=0.1.9
+pkgver=0.1.10
 pkgrel=1
 pkgdesc='Trío PM/WK/RV local en herdr: pj-trio y plugin ravn.trio'
 arch=('any')
@@ -14,7 +14,7 @@ optdepends=('tobi-try: clonar con try-clone el proyecto meta que falte (PJ_TRIO_
 # sube pkgver y este sha256 cuando sale un release nuevo de ravn-trio.
 source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=(
-  'af009ade567f1a30db13fa83dd226844ca72ef6f5886dedf4e10c8eade81e43f'
+  '70b29a6025f5fa6cf71374b3e84f29f1c565101a45fe5ecb47b3672aacdbb6b6'
 )
 
 package() {
